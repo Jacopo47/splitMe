@@ -1,7 +1,5 @@
 package controller
 
-import java.util.stream.Collectors
-
 import controller.Dispatcher.{PORT, TIMEOUT}
 import io.redisearch.Suggestion
 import io.redisearch.client.SuggestionOptions
@@ -14,6 +12,8 @@ import model.{Error, GET, Message, POST, RedisConnection, RouterResponse, Search
 import org.json4s.jackson.Serialization.write
 
 import scala.collection.JavaConverters._
+import scala.collection.mutable.ListBuffer
+import scala.util.{Failure, Success}
 
 object Dispatcher {
   var HOST: String = "localhost"
@@ -53,8 +53,12 @@ class Dispatcher extends ScalaVerticle {
     })
 
 
+    var port = PORT
+
+    if (System.getenv("PORT") != null) port = System.getenv("PORT").toInt
+
     vertx.createHttpServer(options)
-      .requestHandler(router.accept _).listen(PORT)
+      .requestHandler(router.accept _).listen(port)
 
   }
 
@@ -63,7 +67,7 @@ class Dispatcher extends ScalaVerticle {
     * Welcome response.
     */
   private val hello: (RoutingContext, RouterResponse) => Unit = (_, res) => {
-    res.sendResponse(Message("Hello to everyone"))
+    res.sendResponse(Message("Hello to everyone!"))
   }
 
   private val insert: (RoutingContext, RouterResponse) => Unit = (ctx, res) => {
@@ -81,16 +85,15 @@ class Dispatcher extends ScalaVerticle {
         throw BreakHandler()
       })
 
-      val client = RedisConnection().getSearchConnection
+      val client = RedisConnection().getDatabaseConnection
 
-      val suggestion: Suggestion = Suggestion.builder()
-        .str(description + " -> " + element.toUpperCase)
-        .build()
 
-      if (client.addSuggestion(suggestion, false) > 0) {
-        res.sendResponse(Message("Inserimento avvenuto con successo!"))
-      } else {
-        res.sendResponse(Message("Non è stato possibile completare l'inserimento!"))
+      val map = Map("text" -> description, "type" -> element.toUpperCase)
+
+
+      client.hmset("splitme:" + description.toLowerCase + ":" + element.toUpperCase(), map) onComplete  {
+        case Success(_) => res.sendResponse(Message("Inserimento avvenuto con successo!"))
+        case Failure(_) => res.sendResponse(Message("Non è stato possibile completare l'inserimento!"))
       }
     } catch {
       case _: BreakHandler =>
@@ -105,19 +108,34 @@ class Dispatcher extends ScalaVerticle {
   private val search: (RoutingContext, RouterResponse) => Unit = (ctx, res) => {
     val term = ctx.queryParams().get("term")
 
+    val result: ListBuffer[String] = ListBuffer()
     term match {
       case Some(t) =>
-        val client = RedisConnection().getSearchConnection
+        val client = RedisConnection().getDatabaseConnection
+        val blockingClient = RedisConnection().getBlockingConnection
 
-        val suggestions = client.getSuggestion(t, SuggestionOptions.builder().build())
+        client.keys("splitme:*" + t + "*") onComplete {
+          case Success(keys) =>
+              keys.foreach(key => {
+                val app = key.replaceFirst("splitme:", "")
+                val map = blockingClient.hgetAll(key)
+
+                val descr = map.get("text")
+                val attr = map.get("type")
+
+                result += (descr + " -> " + attr)
+              })
 
 
-        val list = suggestions.stream().iterator().asScala.map(_.getString)
 
-        if(list.isEmpty) {
-          res.sendResponse(SearchResult(Seq("Nessun elemento corrisponde alla ricerca..")))
-        } else {
-          res.sendResponse(SearchResult(list.toSeq))
+              if (result.isEmpty) {
+                res.sendResponse(SearchResult(Seq("Nessun elemento corrispondente..")))
+              } else {
+                res.sendResponse(SearchResult(result.toStream.sorted))
+              }
+
+          case Failure(cause) =>
+              res.sendResponse(SearchResult(Seq("Impossibile eseguire la ricerca..")))
         }
 
       case None => res.sendResponse(Message("No input!"))

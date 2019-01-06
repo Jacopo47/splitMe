@@ -2,18 +2,22 @@ package model
 
 
 import akka.actor.ActorSystem
+import com.typesafe.config.{ConfigFactory, ConfigValueFactory}
 import io.redisearch.client.Client
-
 import model.RedisConnection._
 import redis.RedisClient
+import redis.clients.jedis.Jedis
 
 case class RedisConnection() {
-  implicit val akkaSystem: ActorSystem = akka.actor.ActorSystem()
-
+  val config = ConfigFactory.load()
+    .withValue("akka.loglevel", ConfigValueFactory.fromAnyRef("OFF"))
+    .withValue("akka.stdout-loglevel", ConfigValueFactory.fromAnyRef("OFF"))
+  implicit val system = ActorSystem("AlwaysNameYourSystem", config)
 
   val redisHost: String = System.getenv("REDIS_HOST")
   val redisPort: String = System.getenv("REDIS_PORT")
   val redisPw: String = System.getenv("REDIS_PW")
+  val redisUri: Option[String] = Option(System.getenv("REDIS_URL"))
 
   /**
     * Return an open database connection
@@ -23,16 +27,41 @@ case class RedisConnection() {
     */
   def getDatabaseConnection: RedisClient = {
 
+    redisUri match {
+      case Some(uri) =>
+        val splittedUri = uri.replaceFirst("redis://h:", "").split("@")
+        val pw = splittedUri(0)
+        val host = splittedUri(1).split(":")(0)
+        val port = splittedUri(1).split(":")(1)
+
+        RedisClient(host, port.toInt, Some(pw))
+      case None =>
+        if (redisHost == null || redisPort == null || redisPw == null) {
+          RedisClient(REDIS_HOST, REDIS_PORT, REDIS_PW)
+        } else {
+          RedisClient(redisHost, redisPort.toInt, Some(redisPw))
+        }
+    }
+
+
+  }
+
+  def getBlockingConnection: Jedis = {
     if (redisHost == null || redisPort == null || redisPw == null) {
-      RedisClient(REDIS_HOST, REDIS_PORT, REDIS_PW)
+      val db: Jedis = new Jedis(REDIS_HOST, REDIS_PORT)
+      if (REDIS_PW.isDefined) {
+        db.auth(REDIS_PW.get)
+      }
+
+      db
     } else {
-      RedisClient(redisHost, redisPort.toInt, Some(redisPw))
+      val db: Jedis = new Jedis(redisHost, redisPort.toInt)
+      db.auth(redisPw)
+
+      db
     }
   }
 
-  def getSearchConnection: Client = {
-    new Client("splitMe", "localhost", 6379)
-  }
 }
 
 object RedisConnection {

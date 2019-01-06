@@ -63,4 +63,6 @@ dependencies {
     compile "com.github.etaty:rediscala_$scalaMajor:$redisScalaVersion"
 
     implementation 'com.redislabs:jredisearch:0.22.0'
+
+    compile group: 'redis.clients', name: 'jedis', version: '2.9.0'
 }
