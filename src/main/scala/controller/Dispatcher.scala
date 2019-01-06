@@ -1,17 +1,15 @@
 package controller
 
 import controller.Dispatcher.{PORT, TIMEOUT}
-import io.redisearch.Suggestion
-import io.redisearch.client.SuggestionOptions
 import io.vertx.core.http.HttpHeaders
 import io.vertx.lang.scala.ScalaVerticle
 import io.vertx.scala.core.http.HttpServerOptions
 import io.vertx.scala.ext.web.handler.StaticHandler
 import io.vertx.scala.ext.web.{Router, RoutingContext}
+import model.database.Query
 import model.{Error, GET, Message, POST, RedisConnection, RouterResponse, SearchResult}
 import org.json4s.jackson.Serialization.write
 
-import scala.collection.JavaConverters._
 import scala.collection.mutable.ListBuffer
 import scala.util.{Failure, Success}
 
@@ -85,16 +83,16 @@ class Dispatcher extends ScalaVerticle {
         throw BreakHandler()
       })
 
-      val client = RedisConnection().getDatabaseConnection
-
-
       val map = Map("text" -> description, "type" -> element.toUpperCase)
 
 
-      client.hmset("splitme:" + description.toLowerCase + ":" + element.toUpperCase(), map) onComplete  {
-        case Success(_) => res.sendResponse(Message("Inserimento avvenuto con successo!"))
-        case Failure(_) => res.sendResponse(Message("Non è stato possibile completare l'inserimento!"))
-      }
+      Query(db => {
+        db.hmset("splitme:" + description.toLowerCase + ":" + element.toUpperCase(), map) onComplete {
+          case Success(_) => res.sendResponse(Message("Inserimento avvenuto con successo!"))
+          case Failure(_) => res.sendResponse(Message("Non è stato possibile completare l'inserimento!"))
+        }
+      })
+
     } catch {
       case _: BreakHandler =>
       case ex: Exception => res.sendResponse(Message("Non è stato possibile completare l'inserimento! Causa: " + ex.getMessage))
@@ -111,14 +109,16 @@ class Dispatcher extends ScalaVerticle {
     val result: ListBuffer[String] = ListBuffer()
     term match {
       case Some(t) =>
-        val client = RedisConnection().getDatabaseConnection
         val blockingClient = RedisConnection().getBlockingConnection
 
-        client.keys("splitme:*" + t + "*") onComplete {
-          case Success(keys) =>
+        Query(db =>
+          db.keys("splitme:*" + t + "*") onComplete {
+            case Success(keys) =>
               keys.foreach(key => {
                 val app = key.replaceFirst("splitme:", "")
                 val map = blockingClient.hgetAll(key)
+
+                blockingClient.quit()
 
                 val descr = map.get("text")
                 val attr = map.get("type")
@@ -127,17 +127,16 @@ class Dispatcher extends ScalaVerticle {
               })
 
 
-
               if (result.isEmpty) {
                 res.sendResponse(SearchResult(Seq("Nessun elemento corrispondente..")))
               } else {
                 res.sendResponse(SearchResult(result.toStream.sorted))
               }
 
-          case Failure(cause) =>
+            case Failure(cause) =>
               res.sendResponse(SearchResult(Seq("Impossibile eseguire la ricerca..")))
-        }
-
+          }
+        )
       case None => res.sendResponse(Message("No input!"))
     }
   }
