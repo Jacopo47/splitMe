@@ -3,7 +3,6 @@ package model
 
 import akka.actor.ActorSystem
 import com.typesafe.config.{ConfigFactory, ConfigValueFactory}
-import io.redisearch.client.Client
 import model.RedisConnection._
 import redis.RedisClient
 import redis.clients.jedis.Jedis
@@ -47,19 +46,35 @@ case class RedisConnection() {
   }
 
   def getBlockingConnection: Jedis = {
-    if (redisHost == null || redisPort == null || redisPw == null) {
-      val db: Jedis = new Jedis(REDIS_HOST, REDIS_PORT)
-      if (REDIS_PW.isDefined) {
-        db.auth(REDIS_PW.get)
-      }
+    redisUri match {
+      case Some(uri) =>
+        val splittedUri = uri.replaceFirst("redis://h:", "").split("@")
+        val pw = splittedUri(0)
+        val host = splittedUri(1).split(":")(0)
+        val port = splittedUri(1).split(":")(1)
 
-      db
-    } else {
-      val db: Jedis = new Jedis(redisHost, redisPort.toInt)
-      db.auth(redisPw)
+        val db: Jedis = new Jedis(host, port.toInt)
+        if (Some(pw).isDefined) {
+          db.auth(pw)
+        }
 
-      db
+        db
+      case None =>
+        if (redisHost == null || redisPort == null || redisPw == null) {
+          val db: Jedis = new Jedis(REDIS_HOST, REDIS_PORT)
+          if (REDIS_PW.isDefined) {
+            db.auth(REDIS_PW.get)
+          }
+
+          db
+        } else {
+          val db: Jedis = new Jedis(redisHost, redisPort.toInt)
+          db.auth(redisPw)
+
+          db
+        }
     }
+
   }
 
 }
