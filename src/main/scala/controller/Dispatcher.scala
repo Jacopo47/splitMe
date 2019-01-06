@@ -112,7 +112,7 @@ class Dispatcher extends ScalaVerticle {
         val blockingClient = RedisConnection().getBlockingConnection
 
         Query(db =>
-          db.keys("splitme:*" + t + "*") onComplete {
+          db.keys("splitme:*" + t.toLowerCase + "*") onComplete {
             case Success(keys) =>
               keys.foreach(key => {
                 val app = key.replaceFirst("splitme:", "")
